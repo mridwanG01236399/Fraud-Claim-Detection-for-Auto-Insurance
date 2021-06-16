@@ -1,0 +1,609 @@
+---
+title: "DataPreparation"
+author: "WATO"
+date: "10/20/2020"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 3 
+    number_sections: false 
+    df_print: paged
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(caret)
+```
+
+
+# 1. Import the data
+
+- **Read the data**
+  - Totally, there are 1000 observations with 38 predictors and 1 response variable `fraud_reported`.
+```{r}
+data <- read.csv("insurance_claims.csv")
+data <- data[-40] # The last column is not a variable
+dataY <- factor(data$fraud_reported, levels = c("Y","N"))
+dataX <- subset(data, select = -fraud_reported)
+data
+```
+
+- **Data Introduction**
+  - ID (1)
+  - Auto Information (3)
+  - Customer Information (8)
+  - Incident Information (16)
+  - Policy Information (10)
+```{r}
+# Auto Information (3)
+subset(dataX, select = c(auto_make,auto_model,auto_year))
+# Customer Information (8)
+subset(dataX, select = c(age,insured_education_level,insured_hobbies,
+                        insured_occupation,insured_relationship,insured_sex,
+                        insured_zip,months_as_customer))
+# Incident Information (16)
+subset(dataX, select = c(authorities_contacted,	bodily_injuries,	capital.gains,
+                        capital.loss,	collision_type,	incident_city,	incident_date,
+                        incident_hour_of_the_day,	incident_location,
+                        incident_severity,incident_state,	incident_type,
+                        number_of_vehicles_involved,police_report_available,
+                        property_damage,	witnesses))
+# Policy Information (10)
+subset(dataX, select = c(policy_annual_premium,policy_bind_date,policy_csl,
+                        policy_deductable,policy_state,property_claim,
+                        total_claim_amount,umbrella_limit,vehicle_claim,injury_claim))
+```
+
+# 2. Selection of Predictors
+
+### 2.1. Generate new variables
+
+- **Variables `policy_bind_date` and `incident_date`**
+  - `incident_date` has 60 levels `YYYY-MM-DD` which are the incident dates during previous two months.
+  - `policy_bind_date` has 951 levels which are the date when the policy is binded.
+  - We make a subtraction between the two variables to get a new predictor `days_after_bind` to **describe the length of time from policy bind date to incident date**.
+
+  
+```{r}
+str(dataX$incident_date)
+str(dataX$policy_bind_date)
+# display predictors `policy_bind_date` and `incident_date`
+dataX$days_after_bind <- as.Date(dataX$incident_date, format="%Y-%m-%d")-
+  as.Date(dataX$policy_bind_date, format="%Y-%m-%d")
+dataX$days_after_bind <- as.integer(dataX$days_after_bind)
+# Display the result
+subset(dataX, select = c(incident_date, policy_bind_date, days_after_bind))
+```
+
+
+- **Variables `auto_year` and `incident_date`**
+  - `auto_year` is the year of a auto produced. 
+  - `incident_date` is the date of the incident.
+  - We generate a new predictor `years_after_auto_year` to **describe the length of time from the production year of an auto to an incident year.**
+
+```{r}
+dataX$incident_year = substr(dataX$incident_date, start = 1, stop = 4) 
+dataX$years_after_auto_year = as.integer(dataX$incident_year) - dataX$auto_year
+subset(dataX, select = c(auto_year, incident_date, incident_year, years_after_auto_year))
+```
+
+- **Variable `policy_bind_date`**
+  - `policy_bind_date` has 951 levels which are the date when the policy is binded.
+  - We keep only the year information which is save as `policy_bind_year` to have a overall description.
+
+```{r}
+dataX$policy_bind_year <- as.integer(substr(dataX$policy_bind_date, start = 1, stop = 4))
+subset(dataX, select = c(policy_bind_date, policy_bind_year))
+```
+
+
+### 2.2. Identify useless variables
+
+- **Variables `incident_date`, `incident_year` and `policy_bind_date`**
+  - As for `incident_date` and `incident_year`, we delete them because previous `incident_date` does not have power to make prediction for the furture incident.
+  - As for `policy_bind_date`, we delete it because we keep only the year information `policy_bind_year` in the last step to have a overall description.
+
+```{r}
+# Delete predictors `policy_bind_date` and `incident_date`
+dataX <- subset(dataX, select = -c(policy_bind_date, incident_date, incident_year))
+```
+
+- **Variable `insured_zip`**
+  - Convert the data type of `insured_zip` from integer to Factor because zipcode is nominal data.
+  - And then, there are 995 different levels out of 1000 observations, which is too messy to make prediction. Therefore, we delete this predictor.
+
+```{r}
+str(dataX$insured_zip)
+dataX$insured_zip <- as.factor(dataX$insured_zip)
+str(dataX$insured_zip)
+dataX <- subset(dataX,select = -c(insured_zip))
+```
+
+- **Variable `incident_location`**
+  - There are 1000 different levels in the predictor `incident_location`, like "9935 4th Drive"
+  - We try to remove the first 5 digits of each value to leave only the stree name. However, after the transformation, there are still 1000 lefferent levels out of 1000 observations.
+  - Therefore, delete the predictor `incident_location`.
+  - Actrualy, there is another predictor called `incident_city` to capture the location of the incident.
+
+```{r}
+head(dataX$incident_location)
+str(dataX$incident_location) # 1000 levels
+
+# Remove the first 6 digits of the incident_location and save to data$incident_location2
+dataX$incident_location2 = substr(dataX$incident_location, start = 6, stop = 100)
+str(dataX$incident_location2) # still 1000 levels
+
+# remove both incident_location and incident_location2
+dataX <- subset(dataX, select = -c(incident_location,incident_location2))
+```
+
+- **Variable `policy_number`**
+  - An insurance policy number is a unique identifier that attaches a car insurance policy to a specific individual.
+  - There are 1000 different policy numbers out of 1000 observations.
+  - Delete the predictor.
+
+```{r}
+str(dataX$policy_number)
+dataX$policy_number <- as.factor(dataX$policy_number)
+str(dataX$policy_number)
+dataX <- subset(dataX, select = -c(policy_number))
+```
+
+# 3. Pre-process
+  
+### 3.1. Missing values
+  - Missing values are stored as "?"
+  - There are three predictors with missing values:
+    - `property_damage`	(360): Whether the property is damaged? NO and YES.
+    - `police_report_available`	(343): Whether the police report is available? NO and YES.
+    - `collision_type` (178): Collision type. Front Collision, Rear Collision, and Side Collision.
+  - Here, we keep the level "?" in the dataset, which means that the answer for the above three questions is "not sure".
+
+```{r}
+sum(is.na(dataX))
+# missing values are stored as "?"
+library(tidyverse)
+na <- dataX %>% 
+  summarise_all(funs(sum(. == "?"))) %>%
+  gather(key = Attributes, value = Count.Missing.Values) %>%
+  arrange(desc(Count.Missing.Values))
+na
+
+# Display the information of variables that have missing values
+str(subset(dataX, select = c(property_damage, police_report_available,collision_type )))
+
+```
+
+### 3.2. Predictors with near 0 variance
+
+- There is not a predictor with near 0 variance
+
+```{r}
+nearZeroVar(dataX)
+```
+
+
+### 3.3. Split the data
+
+- Split the data to training set and test set with the proportion of 7:3 using **stratified random sampling** to reduce the negative effect of imbalanced dataset.
+- After splitting, there are 700 samples in the training set and 300 in test set.
+
+```{r}
+set.seed(111)
+training = createDataPartition(dataY, p = .7)[[1]]
+trainX<-dataX[training,]
+testX<-dataX[-training,]
+trainY <- dataY[training]
+testY <- dataY[-training]
+dim(trainX)
+```
+
+### 3.4. Numerical data feature engineering
+
+- Apply Boxcox, center, and scale transformations to numerical data.
+
+```{r}
+#  Pre-process the data. Apply Boxcox, center, and scale transformations
+N_PP <- preProcess(trainX, c("BoxCox", "center", "scale"))
+trainX <- predict(N_PP, trainX)
+testX <- predict(N_PP, testX)
+```
+
+
+### 3.5. Categorical data feature engineering
+
+- Apply One-Hot Encoding to all the remaining categorical variables.  
+  - `dummyVars()` function works on the categorical variables to create a full set of dummy variables
+  -  Argument `fullrank=T`, which will create n-1 columns for a categorical variable with n unique levels.
+- After transformation, there are 147 predictors.
+
+```{r}
+dmy <- dummyVars(" ~ .", data = trainX, fullRank = T)
+trainX_dmy <- data.frame(predict(dmy, newdata = trainX))
+testX_dmy <- data.frame(predict(dmy, newdata = testX))
+dim(trainX_dmy)
+```
+
+
+
+
+### 3.7. Up-Sampling Method
+
+```{r}
+table(trainY)
+```
+
+We can see that the training set is extreme imbalanced. Besides using stratified random sampling method in data splitting, we will apply another approach to improve the prediction accuracy of the minority class samples.
+
+Ling and Li (1998) provide one approach to **up-sampling** in which cases from the minority classes are sampled with replacement until each class has approximately the same number. For the insurance data, the training set contained 6466 non-policy and 411 insured customers. If we keep the original minority class data, adding 6055 random samples (with replacement) would bring the minority class equal to the majority. In doing this, some minority class samples may show up in the training set with a fairly high frequency while each sample in the majority class has a single realization in the data. This is very similar to the case weight approach shown in an earlier section, with varying weights per case.
+
+After up-sampling for training set, there are 528 "Y" and 528 "N"
+
+- **Up sampling of TrainX_dmy**
+
+```{r}
+set.seed(100)
+trainXY_dmy <- cbind(trainY, trainX_dmy)
+upSampledTrainXY_dmy <- upSample(x = trainXY_dmy[,-1],
+                           y = trainXY_dmy$trainY,
+                           ## keep the class variable name the same:
+                           yname = "trainY")
+
+# Result:
+upSampledTrainX_dmy <-subset(upSampledTrainXY_dmy, select = -c(trainY))
+upSampledTrainY <- upSampledTrainXY_dmy$trainY
+table(upSampledTrainY)
+```
+
+
+
+
+### 3.8. Review of datasets
+
+**X means predictors and Y means response variable**
+
+- `dataX`: The whole data X without feature engineering
+- `dataY`: The whole data Y
+
+- `trainX`: Training X without dummy variable
+- `trainY`: Training Y
+- `trainX_dmy`: Training X with dummy variable
+- `trainXY_dmy`: Training X and Y with dummy variable
+- `upSampledTrainXY_dmy`: Up-Sampled training X and Y with dummy variable
+- `upSampledTrainX_dmy`: Up-Sampled training X with dummy variable
+- `upSampledTrainY`: Up-Sampled training Y
+
+- `testX`: Test X without dummy variable
+- `testX_dmy`: Test X with dummy variable
+- `testY`: Test Y
+
+```{r}
+dim(dataX)
+dim(trainX)
+dim(trainX_dmy)
+```
+
+
+- **Original Dataset**
+  - `trainX_dmy`: Training X with dummy variable
+  - `trainY`: Training Y
+  - `testX_dmy`: Test X with dummy variable
+  - `testY`: Test Y
+- **Upsampled Dataset**
+  - `upSampledTrainX_dmy`: Up-Sampled training X with dummy variable
+  - `upSampledTrainY`: Up-Sampled training Y
+  - `testX_dmy`: Test X with dummy variable
+  - `testY`: Test Y
+
+```{r}
+ctrl <- trainControl(method = "cv", 
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary,
+                     savePredictions = TRUE,
+                     verboseIter = TRUE)
+```
+
+
+
+# 4. Neural Network
+
+## 4.1. Original Dataset
+
+- **Original Dataset**
+  - `trainX_dmy`: Training X with dummy variable
+  - `trainY`: Training Y
+  - `testX_dmy`: Test X with dummy variable
+  - `testY`: Test Y
+
+### 4.1.1. Baseline Model
+
+```{r}
+# Fit model
+nnetGrid <- expand.grid(size = c(1,5,10), decay = c(0, 2)) # size: number of hidden unites
+maxSize <- max(nnetGrid$size)
+library(nnet)
+set.seed(100)
+NNFit <- train(x = trainX_dmy, 
+                  y = trainY,
+                  method = "nnet",
+                  tuneGrid = nnetGrid,
+                  metric = "ROC",
+                  MaxNWts = 1*(maxSize * (length(trainX_dmy) + 1) + maxSize + 1),
+                  trControl = ctrl)
+NNFit
+
+# Variable importance
+NNImp <- varImp(NNFit, scale = FALSE)
+plot(NNImp, top = 25, scales = list(y = list(cex = .95)), main = "Neural Network")
+
+# Plot of Model Tuning
+plot(NNFit,  ylab = "ROC AUC (Hold-Out Data)")
+
+# Predict testX_dmy
+NN_evalResults <- predict(NNFit,newdata = testX_dmy,type = "prob") # probability for class Y and N
+NN_evalResults$Prediction <- predict(NNFit,newdata = testX_dmy) # Prediction result
+NN_evalResults$True <- testY # True class
+NN_evalResults
+
+# Validation on test set
+confusionMatrix(NN_evalResults$Prediction, NN_evalResults$True, positive = "Y")
+
+# Plot ROC of test set
+library(pROC)
+NNRoc_test <- roc(response = NN_evalResults$True,
+                     predictor = NN_evalResults$Y,
+                     levels =c("N","Y"),
+                     direction = "<")
+plot(NNRoc_test, type = "s", legacy.axes = TRUE, main = "ROC of Neural Networks on test set")
+
+# Get AUC value of test set
+NNRoc_test$auc
+```
+
+
+
+
+### 4.1.2. Model with Alternate Cutoff Method
+
+After the ROC curve has been created, there are several functions in the `pROC` package that can be used to investigate possible cutoffs. The `coords` function returns the points on the ROC curve as well as deriving new cutoffs. The main arguments are `x`, which specifies what should be returned. A value of `x = "all"` will return the coordinates for the curve and their associated cutoffs. A value of `"best"` will derive a new cutoff. Using `x = "best"` in conjunction with the `best.method` (either `"youden"` or `"closest.topleft"`) can be informative:
+
+```{r message=FALSE, warning=FALSE}
+# To get new cut off, we should create the ROC curve on training set first
+# Create the list for Plotting ROC of the training set
+library(pROC)
+NNRoc_training <- roc(response = NNFit$pred$obs,
+                  predictor = NNFit$pred$Y,
+                  levels =c("N","Y"),
+                  direction = "<")
+
+# Get the new cutoff
+NNThreshN <- coords(NNRoc_training, x = "best", best.method = "closest.topleft") 
+NNThreshN
+
+# Predict testX_dmy with new cutoff
+NN_evalResults$Prediction_NewCut <- factor(ifelse(NN_evalResults$Y > NNThreshN$threshold, 
+                                                "Y", "N"),
+                                         levels = c("Y","N")) # Using new cutoff to predict test set
+NN_evalResults
+
+# Validation on test set
+confusionMatrix(NN_evalResults$Prediction_NewCut, NN_evalResults$True, positive = "Y")
+
+# Get AUC value of test set
+print("test set")
+NNRoc_test$auc
+# Get AUC value of training set
+print("training set")
+NNRoc_training$auc
+
+# Plot ROC for training set
+#### Get the specificity and sensitivity for the original threshold of 0.5 on training set
+NNThreshO <- coords(NNRoc_training, x = 0.5, input = "threshold", transpose = FALSE) 
+NNThreshO
+#### Get The specificity and sensitivity for the alternate threshold of 0.027 on training set
+NNThreshN
+#### Visualize the original threshold and new threshold on training set
+plot(NNRoc_training, type = "s", legacy.axes = TRUE, 
+     main = "ROC of Neural Network model on training set")
+points(NNThreshN$specificity,
+       NNThreshN$sensitivity,pch=19,col="red")
+points(NNThreshO$specificity,
+       NNThreshO$sensitivity,pch=19,col="blue")
+
+# Plot ROC for test set
+#### Get the specificity and sensitivity for the original threshold of 0.5 on test set
+NNThreshO_test <- coords(NNRoc_test, x = 0.5, input = "threshold", transpose = FALSE) 
+NNThreshO_test
+#### Get The specificity and sensitivity for the alternate threshold of 0.027 on test set
+NNThreshN_test <- coords(NNRoc_test, x = NNThreshN$threshold, input = "threshold", transpose = FALSE) 
+NNThreshN_test
+#### Visualize the original threshold and new threshold on test set
+plot(NNRoc_test, type = "s", legacy.axes = TRUE, 
+     main = "ROC of Neural Network model on test set")
+points(NNThreshN_test$specificity,
+       NNThreshN_test$sensitivity,pch=19,col="red")
+points(NNThreshO_test$specificity,
+       NNThreshO_test$sensitivity,pch=19,col="blue")
+
+
+```
+
+
+
+## 4.2. Upsampled Dataset
+
+- **Upsampled Dataset**
+  - `upSampledTrainX_dmy`: Up-Sampled training X with dummy variable
+  - `upSampledTrainY`: Up-Sampled training Y
+  - `testX_dmy`: Test X with dummy variable
+  - `testY`: Test Y
+
+### 4.2.1. Baseline Model
+
+```{r message=FALSE, warning=FALSE}
+# Fit model
+nnetGrid <- expand.grid(size = c(1,5,10), decay = c(0, 2)) # size: number of hidden unites
+maxSize <- max(nnetGrid$size)
+set.seed(100)
+NNFit_up <- train(x = upSampledTrainX_dmy, 
+                  y = upSampledTrainY,
+                  method = "nnet",
+                  tuneGrid = nnetGrid,
+                  metric = "ROC",
+                  MaxNWts = 1*(maxSize * (length(upSampledTrainX_dmy) + 1) + maxSize + 1),
+                  trControl = ctrl)
+NNFit_up
+
+
+# Variable importance
+NNImp_up <- varImp(NNFit_up, scale = FALSE)
+plot(NNImp_up, top = 25, scales = list(y = list(cex = .95)), main = "Neural Networks (Up-Sampling Dataset)")
+
+# Plot of Model Tuning
+plot(NNFit_up,  ylab = "ROC AUC (Hold-Out Data)")
+
+# Predict testX_dmy
+NN_up_evalResults <- predict(NNFit_up,newdata = testX_dmy,type = "prob") # probability for class Y and N
+NN_up_evalResults$Prediction <- predict(NNFit_up,newdata = testX_dmy) # Prediction result
+NN_up_evalResults$True <- testY # True class
+NN_up_evalResults
+
+# Validation on test set
+confusionMatrix(NN_up_evalResults$Prediction, NN_up_evalResults$True, positive = "Y")
+
+# Plot ROC of test set
+library(pROC)
+NNRoc_up_test <- roc(response = NN_up_evalResults$True,
+                predictor = NN_up_evalResults$Y,
+                levels =c("N","Y"),
+                direction = "<")
+plot(NNRoc_up_test, type = "s", legacy.axes = TRUE, main = "ROC of Neural Networks on test set")
+
+# Get AUC value of test set
+NNRoc_up_test$auc
+
+```
+
+
+
+
+### 4.2.2. Model with Alternate Cutoff Method
+
+After the ROC curve has been created, there are several functions in the `pROC` package that can be used to investigate possible cutoffs. The `coords` function returns the points on the ROC curve as well as deriving new cutoffs. The main arguments are `x`, which specifies what should be returned. A value of `x = "all"` will return the coordinates for the curve and their associated cutoffs. A value of `"best"` will derive a new cutoff. Using `x = "best"` in conjunction with the `best.method` (either `"youden"` or `"closest.topleft"`) can be informative:
+
+```{r message=FALSE, warning=FALSE}
+# To get new cut off, we should create the ROC curve on training set first
+# Create the list for Plotting ROC of the training set
+library(pROC)
+NNRoc_up_training <- roc(response = NNFit_up$pred$obs,
+                  predictor = NNFit_up$pred$Y,
+                  levels =c("N","Y"),
+                  direction = "<")
+
+# Get the new cutoff
+NNThreshN_up <- coords(NNRoc_up_training, x = "best", best.method = "closest.topleft") 
+NNThreshN_up
+
+# Predict testX_dmy with new cutoff
+NN_up_evalResults$Prediction_NewCut <- factor(ifelse(NN_up_evalResults$Y > NNThreshN_up$threshold, "Y", "N"),
+                                         levels = c("Y","N")) # Using new cutoff to predict test set
+NN_up_evalResults
+
+# Validation on test set
+confusionMatrix(NN_up_evalResults$Prediction_NewCut, NN_up_evalResults$True, positive = "Y")
+
+# Get AUC value of test set
+print("test set")
+NNRoc_up_test$auc
+# Get AUC value of training set
+print("training set")
+NNRoc_up_training$auc
+
+# Plot ROC for training set
+#### Get the specificity and sensitivity for the original threshold of 0.5 on training set
+NNThreshO_up <- coords(NNRoc_up_training, x = 0.5, input = "threshold", transpose = FALSE) 
+NNThreshO_up
+#### Get The specificity and sensitivity for the alternate threshold of 0.2398 on training set
+NNThreshN_up
+#### Visualize the original threshold and new threshold on training set
+plot(NNRoc_up_training, type = "s", legacy.axes = TRUE, 
+     main = "ROC of Neural Networks model on training set")
+points(NNThreshN_up$specificity,
+       NNThreshN_up$sensitivity,pch=19,col="red")
+points(NNThreshO_up$specificity,
+       NNThreshO_up$sensitivity,pch=19,col="blue")
+
+# Plot ROC for test set
+#### Get the specificity and sensitivity for the original threshold of 0.5 on test set
+NNThreshO_up_test <- coords(NNRoc_up_test, x = 0.5, input = "threshold", transpose = FALSE) 
+NNThreshO_up_test
+#### Get The specificity and sensitivity for the alternate threshold of 0.2398 on test set
+NNThreshN_up_test <- coords(NNRoc_up_test, x = NNThreshN_up$threshold, input = "threshold", transpose = FALSE) 
+NNThreshN_up_test
+#### Visualize the original threshold and new threshold on test set
+plot(NNRoc_up_test, type = "s", legacy.axes = TRUE, 
+     main = "ROC of Neural Networks model on test set")
+points(NNThreshN_up_test$specificity,
+       NNThreshN_up_test$sensitivity,pch=19,col="red")
+points(NNThreshO_up_test$specificity,
+       NNThreshO_up_test$sensitivity,pch=19,col="blue")
+
+```
+
+## 4.3. Summary
+
+```{r}
+plot(NNFit, ylab = "ROC AUC (Hold-Out Data)")
+plot(NNFit_up,  add = TRUE, ylab = "ROC AUC (Hold-Out Data)")
+
+```
+
+
+
+```{r}
+#### Visualize the original threshold and new threshold on training set
+# Original data
+plot(NNRoc_training, type = "s", legacy.axes = TRUE, 
+     main = "ROC of Neural Networks model on training set")
+points(NNThreshN$specificity,
+       NNThreshN$sensitivity,pch=17,col="red")
+points(NNThreshO$specificity,
+       NNThreshO$sensitivity,pch=17,col="blue")
+# Upsampled data
+plot(NNRoc_up_training, type = "s", legacy.axes = TRUE, add = TRUE,col = rgb(.5, .5, .5, .5),
+     main = "ROC of Neural Networks model on training set")
+points(NNThreshN_up$specificity,
+       NNThreshN_up$sensitivity,pch=19,col="red")
+points(NNThreshO_up$specificity,
+       NNThreshO_up$sensitivity,pch=19,col="blue")
+text(-0.1,0.05, "Black Line: Original dataset\nGray Line: Up-sampling dataset", cex=0.8)
+text(-0.1,0.13, "Method: closest.topleft", cex=0.8)
+
+#### Visualize the original threshold and new threshold on test set
+# Original Variables
+plot(NNRoc_test, type = "s", legacy.axes = TRUE, 
+     main = "ROC of Neural Networks model on test set")
+points(NNThreshN_test$specificity,
+       NNThreshN_test$sensitivity,pch=17,col="red")
+points(NNThreshO_test$specificity,
+       NNThreshO_test$sensitivity,pch=17,col="blue")
+# Up-sampling dataset
+plot(NNRoc_up_test, type = "s", legacy.axes = TRUE, add = TRUE,col = rgb(.5, .5, .5, .5),
+     main = "ROC of Neural Networks model on test set")
+points(NNThreshN_up_test$specificity,
+       NNThreshN_up_test$sensitivity,pch=19,col="red")
+points(NNThreshO_up_test$specificity,
+       NNThreshO_up_test$sensitivity,pch=19,col="blue")
+text(-0.1,0.05, "Black Line: Original dataset\nGray Line: Up-sampling dataset", cex=0.8)
+
+```
+

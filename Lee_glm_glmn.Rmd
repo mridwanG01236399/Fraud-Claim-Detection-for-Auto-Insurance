@@ -1,0 +1,1037 @@
+---
+title: "DataPreparation"
+author: "WATO"
+date: "10/20/2020"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 3 
+    number_sections: false 
+    df_print: paged
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(caret)
+```
+
+
+# 1. Import the data
+
+- **Read the data**
+  - Totally, there are 1000 observations with 38 predictors and 1 response variable `fraud_reported`.
+```{r}
+data <- read.csv("insurance_claims.csv")
+data <- data[-40] # The last column is not a variable
+dataY <- factor(data$fraud_reported, levels = c("Y","N"))
+dataX <- subset(data, select = -fraud_reported)
+data
+```
+
+- **Data Introduction**
+  - ID (1)
+  - Auto Information (3)
+  - Customer Information (8)
+  - Incident Information (16)
+  - Policy Information (10)
+```{r}
+# Auto Information (3)
+subset(dataX, select = c(auto_make,auto_model,auto_year))
+# Customer Information (8)
+subset(dataX, select = c(age,insured_education_level,insured_hobbies,
+                        insured_occupation,insured_relationship,insured_sex,
+                        insured_zip,months_as_customer))
+# Incident Information (16)
+subset(dataX, select = c(authorities_contacted,	bodily_injuries,	capital.gains,
+                        capital.loss,	collision_type,	incident_city,	incident_date,
+                        incident_hour_of_the_day,	incident_location,
+                        incident_severity,incident_state,	incident_type,
+                        number_of_vehicles_involved,police_report_available,
+                        property_damage,	witnesses))
+# Policy Information (10)
+subset(dataX, select = c(policy_annual_premium,policy_bind_date,policy_csl,
+                        policy_deductable,policy_state,property_claim,
+                        total_claim_amount,umbrella_limit,vehicle_claim,injury_claim))
+```
+
+# 2. Selection of Predictors
+
+### 2.1. Generate new variables
+
+- **Variables `policy_bind_date` and `incident_date`**
+  - `incident_date` has 60 levels `YYYY-MM-DD` which are the incident dates during previous two months.
+  - `policy_bind_date` has 951 levels which are the date when the policy is binded.
+  - We make a subtraction between the two variables to get a new predictor `days_after_bind` to **describe the length of time from policy bind date to incident date**.
+
+  
+```{r}
+str(dataX$incident_date)
+str(dataX$policy_bind_date)
+# display predictors `policy_bind_date` and `incident_date`
+dataX$days_after_bind <- as.Date(dataX$incident_date, format="%Y-%m-%d")-
+  as.Date(dataX$policy_bind_date, format="%Y-%m-%d")
+dataX$days_after_bind <- as.integer(dataX$days_after_bind)
+# Display the result
+subset(dataX, select = c(incident_date, policy_bind_date, days_after_bind))
+```
+
+
+- **Variables `auto_year` and `incident_date`**
+  - `auto_year` is the year of a auto produced. 
+  - `incident_date` is the date of the incident.
+  - We generate a new predictor `years_after_auto_year` to **describe the length of time from the production year of an auto to an incident year.**
+
+```{r}
+dataX$incident_year = substr(dataX$incident_date, start = 1, stop = 4) 
+dataX$years_after_auto_year = as.integer(dataX$incident_year) - dataX$auto_year
+subset(dataX, select = c(auto_year, incident_date, incident_year, years_after_auto_year))
+```
+
+- **Variable `policy_bind_date`**
+  - `policy_bind_date` has 951 levels which are the date when the policy is binded.
+  - We keep only the year information which is save as `policy_bind_year` to have a overall description.
+
+```{r}
+dataX$policy_bind_year <- as.integer(substr(dataX$policy_bind_date, start = 1, stop = 4))
+subset(dataX, select = c(policy_bind_date, policy_bind_year))
+```
+
+
+### 2.2. Identify useless variables
+
+- **Variables `incident_date`, `incident_year` and `policy_bind_date`**
+  - As for `incident_date` and `incident_year`, we delete them because previous `incident_date` does not have power to make prediction for the furture incident.
+  - As for `policy_bind_date`, we delete it because we keep only the year information `policy_bind_year` in the last step to have a overall description.
+
+```{r}
+# Delete predictors `policy_bind_date` and `incident_date`
+dataX <- subset(dataX, select = -c(policy_bind_date, incident_date, incident_year))
+```
+
+- **Variable `insured_zip`**
+  - Convert the data type of `insured_zip` from integer to Factor because zipcode is nominal data.
+  - And then, there are 995 different levels out of 1000 observations, which is too messy to make prediction. Therefore, we delete this predictor.
+
+```{r}
+str(dataX$insured_zip)
+dataX$insured_zip <- as.factor(dataX$insured_zip)
+str(dataX$insured_zip)
+dataX <- subset(dataX,select = -c(insured_zip))
+```
+
+- **Variable `incident_location`**
+  - There are 1000 different levels in the predictor `incident_location`, like "9935 4th Drive"
+  - We try to remove the first 5 digits of each value to leave only the stree name. However, after the transformation, there are still 1000 lefferent levels out of 1000 observations.
+  - Therefore, delete the predictor `incident_location`.
+  - Actrualy, there is another predictor called `incident_city` to capture the location of the incident.
+
+```{r}
+head(dataX$incident_location)
+str(dataX$incident_location) # 1000 levels
+
+# Remove the first 6 digits of the incident_location and save to data$incident_location2
+dataX$incident_location2 = substr(dataX$incident_location, start = 6, stop = 100)
+str(dataX$incident_location2) # still 1000 levels
+
+# remove both incident_location and incident_location2
+dataX <- subset(dataX, select = -c(incident_location,incident_location2))
+```
+
+- **Variable `policy_number`**
+  - An insurance policy number is a unique identifier that attaches a car insurance policy to a specific individual.
+  - There are 1000 different policy numbers out of 1000 observations.
+  - Delete the predictor.
+
+```{r}
+str(dataX$policy_number)
+dataX$policy_number <- as.factor(dataX$policy_number)
+str(dataX$policy_number)
+dataX <- subset(dataX, select = -c(policy_number))
+```
+
+# 3. Pre-process
+  
+### 3.1. Missing values
+  - Missing values are stored as "?"
+  - There are three predictors with missing values:
+    - `property_damage`	(360): Whether the property is damaged? NO and YES.
+    - `police_report_available`	(343): Whether the police report is available? NO and YES.
+    - `collision_type` (178): Collision type. Front Collision, Rear Collision, and Side Collision.
+  - Here, we keep the level "?" in the dataset, which means that the answer for the above three questions is "not sure".
+
+```{r}
+sum(is.na(dataX))
+# missing values are stored as "?"
+library(tidyverse)
+na <- dataX %>% 
+  summarise_all(funs(sum(. == "?"))) %>%
+  gather(key = Attributes, value = Count.Missing.Values) %>%
+  arrange(desc(Count.Missing.Values))
+na
+
+# Display the information of variables that have missing values
+str(subset(dataX, select = c(property_damage, police_report_available,collision_type )))
+
+```
+
+### 3.2. Predictors with near 0 variance
+
+- There is not a predictor with near 0 variance
+
+```{r}
+nearZeroVar(dataX)
+```
+
+
+### 3.3. Split the data
+
+- Split the data to training set and test set with the proportion of 7:3 using **stratified random sampling** to reduce the negative effect of imbalanced dataset.
+- After splitting, there are 700 samples in the training set and 300 in test set.
+
+```{r}
+set.seed(111)
+training = createDataPartition(dataY, p = .7)[[1]]
+trainX<-dataX[training,]
+testX<-dataX[-training,]
+trainY <- dataY[training]
+testY <- dataY[-training]
+dim(trainX)
+```
+
+### 3.4. Numerical data feature engineering
+
+- Apply Boxcox, center, and scale transformations to numerical data.
+
+```{r}
+#  Pre-process the data. Apply Boxcox, center, and scale transformations
+N_PP <- preProcess(trainX, c("BoxCox", "center", "scale"))
+trainX <- predict(N_PP, trainX)
+testX <- predict(N_PP, testX)
+```
+
+
+### 3.5. Categorical data feature engineering
+
+- Apply One-Hot Encoding to all the remaining categorical variables.  
+  - `dummyVars()` function works on the categorical variables to create a full set of dummy variables
+  -  Argument `fullrank=T`, which will create n-1 columns for a categorical variable with n unique levels.
+- After transformation, there are 147 predictors.
+
+```{r}
+dmy <- dummyVars(" ~ .", data = trainX, fullRank = T)
+trainX_dmy <- data.frame(predict(dmy, newdata = trainX))
+testX_dmy <- data.frame(predict(dmy, newdata = testX))
+dim(trainX_dmy)
+```
+
+
+
+
+### 3.7. Up-Sampling Method
+
+```{r}
+table(trainY)
+```
+
+We can see that the training set is extreme imbalanced. Besides using stratified random sampling method in data splitting, we will apply another approach to improve the prediction accuracy of the minority class samples.
+
+Ling and Li (1998) provide one approach to **up-sampling** in which cases from the minority classes are sampled with replacement until each class has approximately the same number. For the insurance data, the training set contained 6466 non-policy and 411 insured customers. If we keep the original minority class data, adding 6055 random samples (with replacement) would bring the minority class equal to the majority. In doing this, some minority class samples may show up in the training set with a fairly high frequency while each sample in the majority class has a single realization in the data. This is very similar to the case weight approach shown in an earlier section, with varying weights per case.
+
+After up-sampling for training set, there are 528 "Y" and 528 "N"
+
+- **Up sampling of TrainX_dmy**
+
+```{r}
+set.seed(100)
+trainXY_dmy <- cbind(trainY, trainX_dmy)
+upSampledTrainXY_dmy <- upSample(x = trainXY_dmy[,-1],
+                           y = trainXY_dmy$trainY,
+                           ## keep the class variable name the same:
+                           yname = "trainY")
+
+# Result:
+upSampledTrainX_dmy <-subset(upSampledTrainXY_dmy, select = -c(trainY))
+upSampledTrainY <- upSampledTrainXY_dmy$trainY
+table(upSampledTrainY)
+```
+
+
+
+
+### 3.8. Review of datasets
+
+**X means predictors and Y means response variable**
+
+- `dataX`: The whole data X without feature engineering
+- `dataY`: The whole data Y
+
+- `trainX`: Training X without dummy variable
+- `trainY`: Training Y
+- `trainX_dmy`: Training X with dummy variable
+- `trainXY_dmy`: Training X and Y with dummy variable
+- `upSampledTrainXY_dmy`: Up-Sampled training X and Y with dummy variable
+- `upSampledTrainX_dmy`: Up-Sampled training X with dummy variable
+- `upSampledTrainY`: Up-Sampled training Y
+
+- `testX`: Test X without dummy variable
+- `testX_dmy`: Test X with dummy variable
+- `testY`: Test Y
+
+```{r}
+dim(dataX)
+dim(trainX)
+dim(trainX_dmy)
+```
+
+
+- **Original Dataset**
+  - `trainX_dmy`: Training X with dummy variable
+  - `trainY`: Training Y
+  - `testX_dmy`: Test X with dummy variable
+  - `testY`: Test Y
+- **Upsampled Dataset**
+  - `upSampledTrainX_dmy`: Up-Sampled training X with dummy variable
+  - `upSampledTrainY`: Up-Sampled training Y
+  - `testX_dmy`: Test X with dummy variable
+  - `testY`: Test Y
+
+```{r}
+ctrl <- trainControl(method = "cv", 
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary,
+                     savePredictions = TRUE,
+                     verboseIter = TRUE)
+```
+
+
+# 4. Sparse LDA
+
+## 4.1. Original Dataset
+
+- **Original Dataset**
+  - `trainX_dmy`: Training X with dummy variable
+  - `trainY`: Training Y
+  - `testX_dmy`: Test X with dummy variable
+  - `testY`: Test Y
+
+### 4.1.1. Baseline Model
+
+```{r message=FALSE, warning=FALSE}
+# Fit model
+library(sparseLDA)
+set.seed(100)
+spLDAFit <- train(x = trainX_dmy, 
+                y = trainY,
+                method = "sparseLDA",
+                tuneGrid = expand.grid(lambda = c(.1),
+                                       NumVars = c(1, 5, 10, 15, 20, 50, 100, 250, 500, 1000)),
+                metric = "ROC",
+                trControl = ctrl)
+spLDAFit
+
+# Variable importance
+spLDAImp <- varImp(spLDAFit, scale = FALSE)
+plot(spLDAImp, top = 25, scales = list(y = list(cex = .95)), main = "sparseLDA")
+
+# Plot of Model Tuning
+plot(spLDAFit, scales = list(x = list(log = 10)), ylab = "ROC AUC (Hold-Out Data)")
+
+# Predict testX_dmy
+spLDA_evalResults <- predict(spLDAFit,newdata = testX_dmy,type = "prob") # probability for class Y and N
+spLDA_evalResults$Prediction <- predict(spLDAFit,newdata = testX_dmy) # Prediction result
+spLDA_evalResults$True <- testY # True class
+spLDA_evalResults
+
+# Validation on test set
+confusionMatrix(spLDA_evalResults$Prediction, spLDA_evalResults$True, positive = "Y")
+
+# Plot ROC of test set
+library(pROC)
+spLDARoc_test <- roc(response = spLDA_evalResults$True,
+                predictor = spLDA_evalResults$Y,
+                levels =c("N","Y"),
+                direction = "<")
+plot(spLDARoc_test, type = "s", legacy.axes = TRUE, main = "ROC of sparseLDA on test set")
+
+# Get AUC value of test set
+spLDARoc_test$auc
+
+```
+
+
+```{r}
+# Fit GLM model Logistic regression (original data set)
+set.seed(100)
+lrFit <- train(x = trainX_dmy, 
+                y = trainY,
+                method = "glm",
+                metric = "ROC",
+                trControl = ctrl)
+lrFit
+
+# Predict testX_dmy
+lr_evalResults <- predict(lrFit,newdata = testX_dmy,type = "prob") 
+# probability for class Y and N
+lr_evalResults$Prediction <- predict(lrFit,newdata = testX_dmy) # Prediction result
+lr_evalResults$True <- testY # True class
+lr_evalResults
+
+# Validation on test set
+confusionMatrix(lr_evalResults$Prediction, lr_evalResults$True, positive = "Y")
+
+# Plot ROC of test set
+library(pROC)
+lrRoc_test <- roc(response = lr_evalResults$True,
+                predictor = lr_evalResults$Y,
+                levels =c("N","Y"),
+                direction = "<")
+plot(lrRoc_test, type = "s", legacy.axes = TRUE, main = "ROC of GLM on test set")
+
+# Get AUC value of test set
+lrRoc_test$auc
+```
+
+```{r}
+# Fit GLMNET model (original data set)
+glmnGrid <- expand.grid(alpha = c(0,  .1,  .2, .4, .6, .8, 1), lambda = seq(.01, .2, length = 40))
+library(glmnet)
+set.seed(100)
+glmnFit <- train(x = trainX_dmy, 
+                y = trainY,
+                method = "glmnet",
+                tuneGrid = glmnGrid,
+                metric = "ROC",
+                trControl = ctrl)
+glmnFit
+
+# Plot of Model Tuning
+plot(glmnFit, ylab = "ROC AUC (Hold-Out Data)")
+
+# Predict testX_dmy
+glmn_evalResults <- predict(glmnFit,newdata = testX_dmy,type = "prob") # probability for class Y and N
+glmn_evalResults$Prediction <- predict(glmnFit,newdata = testX_dmy) # Prediction result
+glmn_evalResults$True <- testY # True class
+glmn_evalResults
+
+# Validation on test set
+confusionMatrix(glmn_evalResults$Prediction, glmn_evalResults$True, positive = "Y")
+
+# Plot ROC of test set
+library(pROC)
+glmnRoc_test <- roc(response = glmn_evalResults$True,
+                predictor = glmn_evalResults$Y,
+                levels =c("N","Y"),
+                direction = "<")
+plot(glmnRoc_test, type = "s", legacy.axes = TRUE, main = "ROC of GLMNET on test set")
+
+# Get AUC value of test set
+glmnRoc_test$auc
+```
+
+
+### 4.1.2. Model with Alternate Cutoff Method
+
+After the ROC curve has been created, there are several functions in the `pROC` package that can be used to investigate possible cutoffs. The `coords` function returns the points on the ROC curve as well as deriving new cutoffs. The main arguments are `x`, which specifies what should be returned. A value of `x = "all"` will return the coordinates for the curve and their associated cutoffs. A value of `"best"` will derive a new cutoff. Using `x = "best"` in conjunction with the `best.method` (either `"youden"` or `"closest.topleft"`) can be informative:
+
+```{r message=FALSE, warning=FALSE}
+# To get new cut off, we should create the ROC curve on training set first
+# Create the list for Plotting ROC of the training set
+library(pROC)
+spLDARoc_training <- roc(response = spLDAFit$pred$obs,
+                  predictor = spLDAFit$pred$Y,
+                  levels =c("N","Y"),
+                  direction = "<")
+
+# Get the new cutoff
+spLDAThreshN <- coords(spLDARoc_training, x = "best", best.method = "closest.topleft") 
+spLDAThreshN
+
+# Predict testX_dmy with new cutoff
+spLDA_evalResults$Prediction_NewCut <- factor(ifelse(spLDA_evalResults$Y > spLDAThreshN$threshold, 
+                                                "Y", "N"),
+                                         levels = c("Y","N")) # Using new cutoff to predict test set
+spLDA_evalResults
+
+# Validation on test set
+confusionMatrix(spLDA_evalResults$Prediction_NewCut, spLDA_evalResults$True, positive = "Y")
+
+# Get AUC value of test set
+print("test set")
+spLDARoc_test$auc
+# Get AUC value of training set
+print("training set")
+spLDARoc_training$auc
+
+# Plot ROC for training set
+#### Get the specificity and sensitivity for the original threshold of 0.5 on training set
+spLDAThreshO <- coords(spLDARoc_training, x = 0.5, input = "threshold", transpose = FALSE) 
+spLDAThreshO
+#### Get The specificity and sensitivity for the alternate threshold of 0.027 on training set
+spLDAThreshN
+#### Visualize the original threshold and new threshold on training set
+plot(spLDARoc_training, type = "s", legacy.axes = TRUE, 
+     main = "ROC of sparseLDA model on training set")
+points(spLDAThreshN$specificity,
+       spLDAThreshN$sensitivity,pch=19,col="red")
+points(spLDAThreshO$specificity,
+       spLDAThreshO$sensitivity,pch=19,col="blue")
+
+# Plot ROC for test set
+#### Get the specificity and sensitivity for the original threshold of 0.5 on test set
+spLDAThreshO_test <- coords(spLDARoc_test, x = 0.5, input = "threshold", transpose = FALSE) 
+spLDAThreshO_test
+#### Get The specificity and sensitivity for the alternate threshold of 0.027 on test set
+spLDAThreshN_test <- coords(spLDARoc_test, x = spLDAThreshN$threshold, input = "threshold", transpose = FALSE) 
+spLDAThreshN_test
+#### Visualize the original threshold and new threshold on test set
+plot(spLDARoc_test, type = "s", legacy.axes = TRUE, 
+     main = "ROC of sparseLDA model on test set")
+points(spLDAThreshN_test$specificity,
+       spLDAThreshN_test$sensitivity,pch=19,col="red")
+points(spLDAThreshO_test$specificity,
+       spLDAThreshO_test$sensitivity,pch=19,col="blue")
+
+
+```
+
+```{r}
+## GLM original data cut off
+
+library(pROC)
+lrRoc_training <- roc(response = lrFit$pred$obs,
+                  predictor = lrFit$pred$Y,
+                  levels =c("N","Y"),
+                  direction = "<")
+
+# Get the new cutoff
+lrThreshN <- coords(lrRoc_training, x = "best", best.method = "closest.topleft") 
+lrThreshN
+
+# Predict testX_dmy with new cutoff
+lr_evalResults$Prediction_NewCut <- factor(ifelse(lr_evalResults$Y > lrThreshN$threshold, 
+                                                "Y", "N"),
+                                         levels = c("Y","N")) # Using new cutoff to predict test set
+lr_evalResults
+
+# Validation on test set
+confusionMatrix(lr_evalResults$Prediction_NewCut, lr_evalResults$True, positive = "Y")
+
+# Get AUC value of test set
+print("test set")
+lrRoc_test$auc
+# Get AUC value of training set
+print("training set")
+lrRoc_training$auc
+
+# Plot ROC for training set
+#### Get the specificity and sensitivity for the original threshold of 0.5 on training set
+lrThreshO <- coords(lrRoc_training, x = 0.5, input = "threshold", transpose = FALSE) 
+lrThreshO
+#### Get The specificity and sensitivity for the alternate threshold of 0.027 on training set
+lrThreshN
+#### Visualize the original threshold and new threshold on training set
+plot(lrRoc_training, type = "s", legacy.axes = TRUE, 
+     main = "ROC of GLM model on training set")
+points(lrThreshN$specificity,
+       lrThreshN$sensitivity,pch=17,col="red")
+points(lrThreshO$specificity,
+       lrThreshO$sensitivity,pch=19,col="blue")
+
+# Plot ROC for test set
+#### Get the specificity and sensitivity for the original threshold of 0.5 on test set
+lrThreshO_test <- coords(lrRoc_test, x = 0.5, input = "threshold", transpose = FALSE) 
+lrThreshO_test
+#### Get The specificity and sensitivity for the alternate threshold of 0.027 on test set
+lrThreshN_test <- coords(lrRoc_test, x = lrThreshN$threshold, input = "threshold", transpose = FALSE) 
+lrThreshN_test
+#### Visualize the original threshold and new threshold on test set
+plot(lrRoc_test, type = "s", legacy.axes = TRUE, 
+     main = "ROC of GLM model on test set")
+points(lrThreshN_test$specificity,
+       lrThreshN_test$sensitivity,pch=17,col="red")
+points(lrThreshO_test$specificity,
+       lrThreshO_test$sensitivity,pch=19,col="blue")
+
+
+```
+
+```{r}
+## GLMNET original data cut off
+
+library(pROC)
+glmnRoc_training <- roc(response = glmnFit$pred$obs,
+                  predictor = glmnFit$pred$Y,
+                  levels =c("N","Y"),
+                  direction = "<")
+
+# Get the new cutoff
+glmnThreshN <- coords(glmnRoc_training, x = "best", best.method = "closest.topleft") 
+glmnThreshN
+
+# Predict testX_dmy with new cutoff
+glmn_evalResults$Prediction_NewCut <- factor(ifelse(glmn_evalResults$Y > glmnThreshN$threshold, 
+                                                "Y", "N"),
+                                         levels = c("Y","N")) # Using new cutoff to predict test set
+glmn_evalResults
+
+# Validation on test set
+confusionMatrix(glmn_evalResults$Prediction_NewCut, glmn_evalResults$True, positive = "Y")
+
+# Get AUC value of test set
+print("test set")
+glmnRoc_test$auc
+# Get AUC value of training set
+print("training set")
+glmnRoc_training$auc
+
+# Plot ROC for training set
+#### Get the specificity and sensitivity for the original threshold of 0.5 on training set
+glmnThreshO <- coords(glmnRoc_training, x = 0.5, input = "threshold", transpose = FALSE) 
+glmnThreshO
+#### Get The specificity and sensitivity for the alternate threshold of 0.247444 on training set
+lrThreshN
+#### Visualize the original threshold and new threshold on training set
+plot(glmnRoc_training, type = "s", legacy.axes = TRUE, 
+     main = "ROC of GLMNET model on training set")
+points(glmnThreshN$specificity,
+       glmnThreshN$sensitivity,pch=17,col="red")
+points(glmnThreshO$specificity,
+       glmnThreshO$sensitivity,pch=19,col="blue")
+
+# Plot ROC for test set
+#### Get the specificity and sensitivity for the original threshold of 0.5 on test set
+glmnThreshO_test <- coords(glmnRoc_test, x = 0.5, input = "threshold", transpose = FALSE) 
+glmnThreshO_test
+#### Get The specificity and sensitivity for the alternate threshold of 0.247444 on test set
+glmnThreshN_test <- coords(glmnRoc_test, x = glmnThreshN$threshold, input = "threshold", transpose = FALSE) 
+glmnThreshN_test
+#### Visualize the original threshold and new threshold on test set
+plot(glmnRoc_test, type = "s", legacy.axes = TRUE, 
+     main = "ROC of GLMNET model on test set")
+points(glmnThreshN_test$specificity,
+       glmnThreshN_test$sensitivity,pch=17,col="red")
+points(glmnThreshO_test$specificity,
+       glmnThreshO_test$sensitivity,pch=19,col="blue")
+
+```
+
+
+## 4.2. Upsampled Dataset
+
+- **Upsampled Dataset**
+  - `upSampledTrainX_dmy`: Up-Sampled training X with dummy variable
+  - `upSampledTrainY`: Up-Sampled training Y
+  - `testX_dmy`: Test X with dummy variable
+  - `testY`: Test Y
+
+### 4.2.1. Baseline Model
+
+```{r message=FALSE, warning=FALSE}
+# Fit model
+library(sparseLDA)
+set.seed(100)
+spLDAFit_up <- train(x = upSampledTrainX_dmy, 
+                y = upSampledTrainY,
+                method = "sparseLDA",
+                tuneGrid = expand.grid(lambda = c(.1),
+                                       NumVars = c(1, 5, 10, 15, 20, 50, 100, 250, 500, 1000)),
+                metric = "ROC",
+                trControl = ctrl)
+spLDAFit_up
+
+# Variable importance
+spLDAImp_up <- varImp(spLDAFit_up, scale = FALSE)
+plot(spLDAImp_up, top = 25, scales = list(y = list(cex = .95)), main = "sparseLDA (UpSampled Dataset)")
+
+# Plot of Model Tuning
+plot(spLDAFit_up, scales = list(x = list(log = 10)), ylab = "ROC AUC (Hold-Out Data)")
+
+# Predict testX_dmy
+spLDA_up_evalResults <- predict(spLDAFit_up,newdata = testX_dmy,type = "prob") # probability for class Y and N
+spLDA_up_evalResults$Prediction <- predict(spLDAFit_up,newdata = testX_dmy) # Prediction result
+spLDA_up_evalResults$True <- testY # True class
+spLDA_up_evalResults
+
+# Validation on test set
+confusionMatrix(spLDA_up_evalResults$Prediction, spLDA_up_evalResults$True, positive = "Y")
+
+# Plot ROC of test set
+library(pROC)
+spLDARoc_up_test <- roc(response = spLDA_up_evalResults$True,
+                predictor = spLDA_up_evalResults$Y,
+                levels =c("N","Y"),
+                direction = "<")
+plot(spLDARoc_up_test, type = "s", legacy.axes = TRUE, main = "ROC of sparseLDA on test set")
+
+# Get AUC value of test set
+spLDARoc_up_test$auc
+
+```
+
+```{r}
+
+## 5.2.4 glm 
+# Use trainX_dmy to fit mdoel
+set.seed(100)
+lrFit_up <- train(x = upSampledTrainX_dmy, 
+                y = upSampledTrainY,
+                method = "glm",
+                metric = "ROC",
+                trControl = ctrl)
+
+lrFit_up
+
+# Predict testX_dmy 
+# probability for class Y and N
+lr_up_evalResults <- predict(lrFit_up,newdata = testX_dmy,type = "prob") 
+
+# Prediction result
+lr_up_evalResults$Prediction <- predict(lrFit_up,newdata = testX_dmy) 
+lr_up_evalResults$True <- testY # True class
+lr_up_evalResults
+
+# Validation on test set
+confusionMatrix(lr_up_evalResults$Prediction, lr_up_evalResults$True, positive = "Y")
+
+# Plot ROC of test set
+library(pROC)
+lrRoc_up_test <- roc(response = lr_up_evalResults$True,
+                predictor = lr_up_evalResults$Y,
+                levels =c("N","Y"),
+                direction = "<")
+plot(lrRoc_up_test, type = "s", legacy.axes = TRUE, main = "ROC of GLM on test set")
+
+# Get AUC value
+lrRoc_up_test$auc
+```
+
+```{r}
+## 5.2.5 glmnet
+glmnGrid <- expand.grid(alpha = c(0,  .1,  .2, .4, .6, .8, 1), lambda = seq(.01, .2, length = 40))
+library(glmnet)
+set.seed(100)
+glmnFit_up <- train(x = upSampledTrainX_dmy, 
+                y = upSampledTrainY,
+                method = "glmnet",
+                tuneGrid = glmnGrid,
+                metric = "ROC",
+                trControl = ctrl)
+
+glmnFit_up
+
+# Predict testX_dmy 
+# probability for class Y and N
+glmn_up_evalResults <- predict(glmnFit_up,newdata = testX_dmy,type = "prob") 
+
+# Prediction result
+glmn_up_evalResults$Prediction <- predict(glmnFit_up,newdata = testX_dmy) 
+glmn_up_evalResults$True <- testY # True class
+glmn_up_evalResults
+
+# Validation on test set
+confusionMatrix(glmn_up_evalResults$Prediction, glmn_up_evalResults$True, positive = "Y")
+
+# Plot ROC of test set
+library(pROC)
+glmnRoc_up_test <- roc(response = glmn_up_evalResults$True,
+                predictor = glmn_up_evalResults$Y,
+                levels =c("N","Y"),
+                direction = "<")
+plot(glmnRoc_up_test, type = "s", legacy.axes = TRUE, main = "ROC of GLMNET on test set")
+
+# Get AUC value
+glmnRoc_up_test$auc
+```
+
+
+### 4.2.2. Model with Alternate Cutoff Method
+
+After the ROC curve has been created, there are several functions in the `pROC` package that can be used to investigate possible cutoffs. The `coords` function returns the points on the ROC curve as well as deriving new cutoffs. The main arguments are `x`, which specifies what should be returned. A value of `x = "all"` will return the coordinates for the curve and their associated cutoffs. A value of `"best"` will derive a new cutoff. Using `x = "best"` in conjunction with the `best.method` (either `"youden"` or `"closest.topleft"`) can be informative:
+
+```{r message=FALSE, warning=FALSE}
+# To get new cut off, we should create the ROC curve on training set first
+# Create the list for Plotting ROC of the training set
+library(pROC)
+spLDARoc_up_training <- roc(response = spLDAFit_up$pred$obs,
+                  predictor = spLDAFit_up$pred$Y,
+                  levels =c("N","Y"),
+                  direction = "<")
+
+# Get the new cutoff
+spLDAThreshN_up <- coords(spLDARoc_up_training, x = "best", best.method = "closest.topleft") 
+spLDAThreshN_up
+
+# Predict testX_dmy with new cutoff
+spLDA_up_evalResults$Prediction_NewCut <- factor(ifelse(spLDA_up_evalResults$Y > spLDAThreshN_up$threshold, "Y", "N"),
+                                         levels = c("Y","N")) # Using new cutoff to predict test set
+spLDA_up_evalResults
+
+# Validation on test set
+confusionMatrix(spLDA_up_evalResults$Prediction_NewCut, spLDA_up_evalResults$True, positive = "Y")
+
+# Get AUC value of test set
+print("test set")
+spLDARoc_up_test$auc
+# Get AUC value of training set
+print("training set")
+spLDARoc_up_training$auc
+
+# Plot ROC for training set
+#### Get the specificity and sensitivity for the original threshold of 0.5 on training set
+spLDAThreshO_up <- coords(spLDARoc_up_training, x = 0.5, input = "threshold", transpose = FALSE) 
+spLDAThreshO_up
+#### Get The specificity and sensitivity for the alternate threshold of 0.2398 on training set
+spLDAThreshN_up
+#### Visualize the original threshold and new threshold on training set
+plot(spLDARoc_up_training, type = "s", legacy.axes = TRUE, 
+     main = "ROC of sparseLDA model on training set")
+points(spLDAThreshN_up$specificity,
+       spLDAThreshN_up$sensitivity,pch=19,col="red")
+points(spLDAThreshO_up$specificity,
+       spLDAThreshO_up$sensitivity,pch=19,col="blue")
+
+# Plot ROC for test set
+#### Get the specificity and sensitivity for the original threshold of 0.5 on test set
+spLDAThreshO_up_test <- coords(spLDARoc_up_test, x = 0.5, input = "threshold", transpose = FALSE) 
+spLDAThreshO_up_test
+#### Get The specificity and sensitivity for the alternate threshold of 0.2398 on test set
+spLDAThreshN_up_test <- coords(spLDARoc_up_test, x = spLDAThreshN_up$threshold, input = "threshold", transpose = FALSE) 
+spLDAThreshN_up_test
+#### Visualize the original threshold and new threshold on test set
+plot(spLDARoc_up_test, type = "s", legacy.axes = TRUE, 
+     main = "ROC of sparseLDA model on test set")
+points(spLDAThreshN_up_test$specificity,
+       spLDAThreshN_up_test$sensitivity,pch=19,col="red")
+points(spLDAThreshO_up_test$specificity,
+       spLDAThreshO_up_test$sensitivity,pch=19,col="blue")
+
+```
+
+
+```{r}
+# GLM up-sampling with new cutoff
+# To get new cut off, we should create the ROC curve on training set first
+# Create the list for Plotting ROC of the training set
+library(pROC)
+lrRoc_up_training <- roc(response = lrFit_up$pred$obs,
+                  predictor = lrFit_up$pred$Y,
+                  levels =c("N","Y"),
+                  direction = "<")
+
+# Get the new cutoff
+lrThreshN_up <- coords(lrRoc_up_training, x = "best", best.method = "closest.topleft") 
+lrThreshN_up
+
+# Predict testX_dmy with new cutoff
+lr_up_evalResults$Prediction_NewCut <- factor(ifelse(lr_up_evalResults$Y > lrThreshN_up$threshold, "Y", "N"),
+                                       levels = c("Y","N")) # Using new cutoff to predict test set
+lr_up_evalResults
+
+# Validation on test set
+confusionMatrix(lr_up_evalResults$Prediction_NewCut, lr_up_evalResults$True, positive = "Y")
+
+# Get AUC value of test set
+print("test set")
+lrRoc_up_test$auc
+# Get AUC value of training set
+print("training set")
+lrRoc_up_training$auc
+
+# Plot ROC for training set
+#### Get the specificity and sensitivity for the original threshold of 0.5 on training set
+lrThreshO_up <- coords(lrRoc_up_training, x = 0.5, input = "threshold", transpose = FALSE) 
+lrThreshO_up
+#### Get The specificity and sensitivity for the alternate threshold of 0.5003804 on training set
+lrThreshN_up
+#### Visualize the original threshold and new threshold on training set
+plot(lrRoc_up_training, type = "s", legacy.axes = TRUE, 
+     main = "ROC of GLM model on training set")
+points(lrThreshN_up$specificity,
+       IrThreshN_up$sensitivity,pch=17,col="red")
+points(lrThreshO_up$specificity,
+       IrThreshO_up$sensitivity,pch=19,col="blue")
+
+# Plot ROC for test set
+#### Get the specificity and sensitivity for the original threshold of 0.5 on test set
+lrThreshO_up_test <- coords(lrRoc_up_test, x = 0.5, input = "threshold", transpose = FALSE) 
+lrThreshO_up_test
+#### Get The specificity and sensitivity for the alternate threshold of 0.5003804 on test set
+lrThreshN_up_test <- coords(lrRoc_up_test, x = lrThreshN_up$threshold, input = "threshold", transpose = FALSE) 
+lrThreshN_up_test
+#### Visualize the original threshold and new threshold on test set
+plot(lrRoc_up_test, type = "s", legacy.axes = TRUE, 
+     main = "ROC of GLM model on test set")
+points(lrThreshN_up_test$specificity,
+       lrThreshN_up_test$sensitivity,pch=17,col="red")
+points(lrThreshO_up_test$specificity,
+       lrThreshO_up_test$sensitivity,pch=19,col="blue")
+
+
+
+```
+
+
+```{r}
+# GLMNET up-sampling with new cutoff
+
+# To get new cut off, we should create the ROC curve on training set first
+# Create the list for Plotting ROC of the training set
+library(pROC)
+glmnRoc_up_training <- roc(response = glmnFit_up$pred$obs,
+                  predictor = glmnFit_up$pred$Y,
+                  levels =c("N","Y"),
+                  direction = "<")
+
+# Get the new cutoff
+glmnThreshN_up <- coords(glmnRoc_up_training, x = "best", best.method = "closest.topleft") 
+glmnThreshN_up
+
+# Predict testX_dmy with new cutoff
+glmn_up_evalResults$Prediction_NewCut <- factor(ifelse(glmn_up_evalResults$Y > glmnThreshN_up$threshold, "Y", "N"),
+                                       levels = c("Y","N")) 
+# Using new cutoff to predict test set
+glmn_up_evalResults
+
+# Validation on test set
+confusionMatrix(glmn_up_evalResults$Prediction_NewCut, glmn_up_evalResults$True, positive = "Y")
+
+# Get AUC value of test set
+print("test set")
+glmnRoc_up_test$auc
+# Get AUC value of training set
+print("training set")
+glmnRoc_up_training$auc
+
+# Plot ROC for training set
+#### Get the specificity and sensitivity for the original threshold of 0.5 on training set
+glmnThreshO_up <- coords(glmnRoc_up_training, x = 0.5, input = "threshold", transpose = FALSE) 
+glmnThreshO_up
+#### Get The specificity and sensitivity for the alternate threshold of 0.5037587 on training set
+glmnThreshN_up
+
+#### Visualize the original threshold and new threshold on training set
+plot(glmnRoc_up_training, type = "s", legacy.axes = TRUE, 
+     main = "ROC of GLMNET model on training set")
+points(glmnThreshN_up$specificity,
+       glmnThreshN_up$sensitivity,pch=17,col="red")
+points(glmnThreshO_up$specificity,
+       glmnThreshO_up$sensitivity,pch=19,col="blue")
+
+# Plot ROC for test set
+#### Get the specificity and sensitivity for the original threshold of 0.5 on test set
+glmnThreshO_up_test <- coords(glmnRoc_up_test, x = 0.5, input = "threshold", transpose = FALSE) 
+glmnThreshO_up_test
+#### Get The specificity and sensitivity for the alternate threshold of 0.5037587 on test set
+glmnThreshN_up_test <- coords(glmnRoc_up_test, x = glmnThreshN_up$threshold, input = "threshold", transpose = FALSE) 
+glmnThreshN_up_test
+#### Visualize the original threshold and new threshold on test set
+plot(glmnRoc_up_test, type = "s", legacy.axes = TRUE, 
+     main = "ROC of GLMNET model on test set")
+points(glmnThreshN_up_test$specificity,
+       glmnThreshN_up_test$sensitivity,pch=17,col="red")
+points(glmnThreshO_up_test$specificity,
+       glmnThreshO_up_test$sensitivity,pch=19,col="blue")
+
+
+```
+
+
+## 4.3. Summary
+
+```{r}
+plot(glmnFit, scales = list(x = list(log = 10)), ylab = "ROC AUC (Hold-Out Data)", main="GLMNET Hyperparameter Tuning (Original Dataset)")
+plot(glmnFit_up, scales = list(x = list(log = 10)), add = TRUE, ylab = "ROC AUC (Hold-Out Data)", main="GLMNET Hyperparameter Tuning (Up-sampling Dataset)")
+
+```
+
+
+
+```{r}
+#### Visualize the original threshold and new threshold on training set
+# Original data
+plot(lrRoc_training, type = "s", legacy.axes = TRUE, 
+     main = "ROC of GLM model on training set")
+points(lrThreshN$specificity,
+       lrThreshN$sensitivity,pch=17,col="red")
+points(lrThreshO$specificity,
+       lrThreshO$sensitivity,pch=17,col="blue")
+# Upsampled data
+plot(lrRoc_up_training, type = "s", legacy.axes = TRUE, add = TRUE,col = rgb(.5, .5, .5, .5),
+     main = "ROC of GLM model on training set")
+points(lrThreshN_up$specificity,
+       lrThreshN_up$sensitivity,pch=19,col="red")
+points(lrThreshO_up$specificity,
+       lrThreshO_up$sensitivity,pch=19,col="blue")
+text(-0.1,0.05, "Black Line: Original dataset\nGray Line: Up-sampling dataset", cex=0.8)
+text(-0.1,0.13, "Method: closest.topleft", cex=0.8)
+
+#### Visualize the original threshold and new threshold on test set
+# Original Variables
+plot(lrRoc_test, type = "s", legacy.axes = TRUE, 
+     main = "ROC of GLM model on test set")
+points(lrThreshN_test$specificity,
+       lrThreshN_test$sensitivity,pch=17,col="red")
+points(lrThreshO_test$specificity,
+       lrThreshO_test$sensitivity,pch=17,col="blue")
+# Up-sampling dataset
+plot(lrRoc_up_test, type = "s", legacy.axes = TRUE, add = TRUE,col = rgb(.5, .5, .5, .5),
+     main = "ROC of GLM model on test set")
+points(lrThreshN_up_test$specificity,
+       lrThreshN_up_test$sensitivity,pch=19,col="red")
+points(lrThreshO_up_test$specificity,
+       lrThreshO_up_test$sensitivity,pch=19,col="blue")
+text(-0.1,0.05, "Black Line: Original dataset\nGray Line: Up-sampling dataset", cex=0.8)
+
+```
+
+```{r}
+#### Visualize the original threshold and new threshold on training set
+# Original data
+plot(glmnRoc_training, type = "s", legacy.axes = TRUE, 
+     main = "ROC of GLMNET model on training set")
+points(glmnThreshN$specificity,
+       glmnThreshN$sensitivity,pch=17,col="red")
+points(glmnThreshO$specificity,
+       glmnThreshO$sensitivity,pch=17,col="blue")
+# Upsampled data
+plot(glmnRoc_up_training, type = "s", legacy.axes = TRUE, add = TRUE,col = rgb(.5, .5, .5, .5),
+     main = "ROC of GLMNET model on training set")
+points(glmnThreshN_up$specificity,
+       glmnThreshN_up$sensitivity,pch=19,col="red")
+points(glmnThreshO_up$specificity,
+       glmnThreshO_up$sensitivity,pch=19,col="blue")
+text(-0.1,0.05, "Black Line: Original dataset\nGray Line: Up-sampling dataset", cex=0.8)
+text(-0.1,0.13, "Method: closest.topleft", cex=0.8)
+
+#### Visualize the original threshold and new threshold on test set
+# Original Variables
+plot(glmnRoc_test, type = "s", legacy.axes = TRUE, 
+     main = "ROC of GLMNET model on test set")
+points(glmnThreshN_test$specificity,
+       glmnThreshN_test$sensitivity,pch=17,col="red")
+points(glmnThreshO_test$specificity,
+       glmnThreshO_test$sensitivity,pch=17,col="blue")
+# Up-sampling dataset
+plot(glmnRoc_up_test, type = "s", legacy.axes = TRUE, add = TRUE,col = rgb(.5, .5, .5, .5),
+     main = "ROC of GLMNET model on test set")
+points(glmnThreshN_up_test$specificity,
+       glmnThreshN_up_test$sensitivity,pch=19,col="red")
+points(glmnThreshO_up_test$specificity,
+       glmnThreshO_up_test$sensitivity,pch=19,col="blue")
+text(-0.1,0.05, "Black Line: Original dataset\nGray Line: Up-sampling dataset", cex=0.8)
+
+```
+
+
+
+
+
